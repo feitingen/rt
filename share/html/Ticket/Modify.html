@@ -48,6 +48,8 @@
 <& /Elements/Header, Title => loc('Modify ticket #[_1]', $TicketObj->Id) &>
 <& /Elements/Tabs &>
 
+<& /Ticket/Elements/BecomeRecent Ticket => $TicketObj &>
+
 % $m->callback(CallbackName => 'BeforeActionList', Actions => \@results, ARGSRef => \%ARGS, Ticket => $TicketObj);
 
 <& /Elements/ListActions, actions => \@results &>

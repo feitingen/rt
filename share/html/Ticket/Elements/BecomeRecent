@@ -45,46 +45,13 @@
 %# those contributions and any derivatives thereof.
 %#
 %# END BPS TAGGED BLOCK }}}
-<& /Elements/Header, Title => loc("Ticket History # [_1] [_2]", $Ticket->Id, $Ticket->Subject) &>
-<& /Elements/Tabs &>
-
-<& /Ticket/Elements/BecomeRecent Ticket => $TicketObj &>
-
-% $m->callback( %ARGS, Ticket => $Ticket, CallbackName => 'BeforeActionList' );
-
-
-<br />
-      
-<& /Elements/ShowHistory,
-    Object => $Ticket,
-    ShowHeaders => $ARGS{'ShowHeaders'}, 
-    Attachments => $attachments,
-    AttachmentContent => $attachment_content,
-    DisplayPath => 'History.html',
-    &> 
-
-% $m->callback( %ARGS, CallbackName => 'AfterShowHistory', Ticket => $Ticket );
-
 <%ARGS>
-$id => undef
+$Ticket => undef
 </%ARGS>
-
 <%INIT>
 
-  
-
-my $Ticket = LoadTicket ($id);
-
-unless ($Ticket->CurrentUserHasRight('ShowTicket')) {
-    Abort("No permission to view ticket");
+if (defined $Ticket) {
+    $Ticket->CurrentUser->AddRecentlyViewedTicket($Ticket);
 }
 
-my $attachments = $Ticket->Attachments;
-my $attachment_content = $Ticket->TextAttachments;
-
-
 </%INIT>
-
-
-
-

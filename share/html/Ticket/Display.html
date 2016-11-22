@@ -50,6 +50,8 @@
     LinkRel => \%link_rel &>
 <& /Elements/Tabs &>
 
+<& /Ticket/Elements/BecomeRecent, Ticket => $TicketObj &>
+
 % $m->callback(CallbackName => 'BeforeActionList', %ARGS, Actions => \@Actions, ARGSRef => \%ARGS, Ticket => $TicketObj);
 
 <& /Elements/ListActions, actions => \@Actions &>
