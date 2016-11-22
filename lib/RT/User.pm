@@ -2054,6 +2054,88 @@ sub ToggleBookmark {
     return $is_bookmarked;
 }
 
+=head2 RecentlyViewedTickets TICKET
+
+Returns an array of up to ten RT::Ticket objects ordered by recently viewed first.
+
+=cut
+
+sub RecentlyViewedTickets {
+    my $self = shift;
+
+    my %recentTickets;
+    my $content = $self->FirstAttribute('RecentlyViewTickets');
+    $content = $content ? $content->Content : {};
+    if (defined $content) {
+        %recentTickets = %$content;
+    }
+
+    #Create the array of RT::Ticket objects by sorting our hash by the recent
+    #timestamps in revers order then looping through and adding each RT::Ticket
+    #to the array, creating an array with the most recent ticket first
+    my @tickets;
+    for my $unixDate (reverse sort keys %recentTickets) {
+        my $id = $recentTickets{$unixDate};
+        my $ticket = new RT::Ticket($self);
+        $ticket->Load($id);
+        if ($ticket->Id) {
+            push @tickets, $ticket;
+        }
+    }
+
+    return @tickets;
+}
+
+=head2 AddRecentlyViewedTicket TICKET
+
+Takes an RT::Ticket object and adds it to the current users RecentlyViewedTickets
+
+=cut
+
+sub AddRecentlyViewedTicket {
+    my $self   = shift;
+    my $ticket = shift;
+
+    #Nothing to do without a ticket
+    return unless defined $ticket->Id;
+
+    my %recentTickets;
+    my $content = $self->FirstAttribute('RecentlyViewTickets');
+    $content = $content ? $content->Content : {};
+    if (defined $content) {
+        %recentTickets = %$content;
+    }
+
+    #Remove the ticket if it exists in recents already
+    for my $unixDate (keys %recentTickets) {
+        if ($recentTickets{$unixDate} == $ticket->Id) {
+            $recentTickets{$unixDate} = undef;
+            last;
+        }
+    }
+
+    #Limit our existing recent tickets to 9
+    my %truncatedTickets;
+    my $count = 0;
+    for my $unixDate (sort keys %recentTickets) {
+        if ($recentTickets{$unixDate}) {
+            $truncatedTickets{$unixDate} = $recentTickets{$unixDate};
+            $count++;
+        }
+        if ($count >= 9) {
+            last;
+        }
+    }
+
+    #Add the new ticket
+    $truncatedTickets{time()} = $ticket->Id;
+
+    $self->SetAttribute(
+        Name    => 'RecentlyViewTickets',
+        Content => \%truncatedTickets,
+    );
+}
+
 =head2 Create PARAMHASH
 
 Create takes a hash of values and creates a row in the database:
