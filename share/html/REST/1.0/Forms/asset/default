@@ -1,0 +1,424 @@
+#Place file in /opt/rt4/share/html/REST/1.0/Forms/asset/
+%# BEGIN BPS TAGGED BLOCK {{{
+%#
+%# COPYRIGHT:
+%#
+%# This software is Copyright (c) 1996-2016 Best Practical Solutions, LLC
+%#                                          <sales@bestpractical.com>
+%#
+%# (Except where explicitly superseded by other copyright notices)
+%#
+%#
+%# LICENSE:
+%#
+%# This work is made available to you under the terms of Version 2 of
+%# the GNU General Public License. A copy of that license should have
+%# been provided with this software, but in any event can be snarfed
+%# from www.gnu.org.
+%#
+%# This work is distributed in the hope that it will be useful, but
+%# WITHOUT ANY WARRANTY; without even the implied warranty of
+%# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%# General Public License for more details.
+%#
+%# You should have received a copy of the GNU General Public License
+%# along with this program; if not, write to the Free Software
+%# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+%# 02110-1301 or visit their web page on the internet at
+%# http://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
+%#
+%#
+%# CONTRIBUTION SUBMISSION POLICY:
+%#
+%# (The following paragraph is not intended to limit the rights granted
+%# to you to modify and distribute this software under the terms of
+%# the GNU General Public License and is only of importance to you if
+%# you choose to contribute your changes and enhancements to the
+%# community by submitting them to Best Practical Solutions, LLC.)
+%#
+%# By intentionally submitting any modifications, corrections or
+%# derivatives to this work, or any other work intended for use with
+%# Request Tracker, to Best Practical Solutions, LLC, you confirm that
+%# you are the copyright holder for those contributions and you grant
+%# Best Practical Solutions,  LLC a nonexclusive, worldwide, irrevocable,
+%# royalty-free, perpetual, license to use, copy, create derivative
+%# works based on those contributions, and sublicense and distribute
+%# those contributions and any derivatives thereof.
+%#
+%# END BPS TAGGED BLOCK }}}
+%# REST/1.0/Forms/asset/default
+%#
+<%ARGS>
+$id
+$format => 's'
+$fields => undef # these are the fields passed to the rt "-f" flag.
+$changes => {}
+</%ARGS>
+<%INIT>
+use MIME::Entity;
+use RT::Interface::REST;
+my $cf_spec = RT::Interface::REST->custom_field_spec(1);
+
+my @comments;
+my ($c, $o, $k, $e) = ("", [], {}, 0);
+my %data = %$changes;
+my $asset = RT::Asset->new($session{CurrentUser});
+
+my @fields = qw(Name Description Catalog Status Created LastUpdated);
+my @dates  = qw(Created LastUpdated);
+my @simple = qw(Name Description Catalog Status Owner);
+my @create = @fields;
+push @create, 'Contacts';
+my @people = qw(HeldBy Contacts);
+
+my %fields = map { lc $_ => $_ } @fields;
+my %create = map {lc $_ => $_} @create;
+my %people = map { lc $_ => $_ } @people;
+my %dates = map { lc $_ => $_ } @dates;
+my %simple = map { lc $_ => $_ } @simple;
+
+if ($id ne 'new') {
+    $asset->Load($id);
+    if (!$asset->Id) {
+        return [ "# Asset $id does not exist.", [], {}, 1 ];
+    }
+    elsif ( %data ) {
+        if ( $data{status} && lc $data{status} eq 'deleted' && ! grep { $_ ne 'id' && $_ ne 'status' } keys %data ) {
+            if ( !$asset->CurrentUserHasRight('DeleteAsset') ) {
+                return [ "# You are not allowed to delete asset $id.", [], {}, 1 ];
+            }
+        }
+        elsif ( !$asset->CurrentUserHasRight('ModifyAsset') ) {
+                return [ "# You are not allowed to modify asset $id.", [], {}, 1 ];
+        }
+    }
+    elsif (!$asset->CurrentUserCanSee) {
+        return [ "# You are not allowed to display asset $id.", [], {}, 1 ];
+    }
+}
+
+#Create a new Asset
+else {
+	#If no data was passed to the "content" field
+    if (keys %data == 0) {
+        return [
+            "# Required: Name",
+            [ "id", @fields ],
+            {
+                id => 'asset/new',
+                Name => '<asset name>',
+				Catalog => '<catalog id>',
+                Description => "",
+            },
+            0
+        ];
+    }
+
+	#If data was passed to the "content" field
+    else {
+        my %v;
+
+        foreach my $k (keys %data) {
+            if (exists $create{lc $k}) {
+                $v{$create{lc $k}} = delete $data{$k};
+            }
+
+            # Set custom field
+            elsif ($k =~ /^$cf_spec/) {
+                my $key = $1 || $2;
+
+                my $cf = RT::CustomField->new( $session{CurrentUser} );
+                $cf->LoadByName(
+                    Name          => $key,
+                    LookupType    => RT::Asset->CustomFieldLookupType,
+                    ObjectId      => $data{Catalog} || $v{Catalog},
+                    IncludeGlobal => 1,
+                );
+
+                if (not $cf->id) {
+                    push @comments, "# Invalid custom field name ($key)";
+                    delete $data{$k};
+                    next;
+                }
+                my $val = delete $data{$k};
+                next unless defined $val && length $val;
+                $v{"CustomField-".$cf->Id()} = $cf->SingleValue ? $val : vsplit($val,1);
+            }
+        }
+
+        if ($v{Name} eq '<asset name>') {
+            my %o = keys %$changes;
+            delete @o{"id", @fields};
+            return [
+                "# Please set the asset name.",
+                [ "id", @fields, keys %o ], $changes, 1
+            ];
+        }
+        if ($v{Catalog} eq '<catalog id>') {
+            my %o = keys %$changes;
+            delete @o{"id", @fields};
+            return [
+                "# Please set the Catalog id.",
+                [ "id", @fields, keys %o ], $changes, 1
+            ];
+        }
+
+        $asset->Create(%v);
+        unless ($asset->Id) {
+            return [ "# Could not create asset.", [], {}, 1 ];
+        }
+
+        delete $data{id};
+        $id = $asset->Id;
+        push(@comments, "# Asset $id created.");
+        goto DONE if keys %data == 0;
+    }
+}
+
+#If not new and no data was passed to the "content" field
+#This is a view asset
+if ( keys %data == 0) {
+    my (@data, $key);
+
+    push @data, [ id => "asset/".$asset->Id ];
+    foreach my $key (@fields) {
+        push @data, [ $key => $asset->$key ];
+    }
+
+    push @data, [ Owner => $asset->Owner->Name ]
+        if (!%$fields || exists $fields->{lc 'Owner'});
+
+    foreach $key (@people) {
+        next unless (!%$fields || (exists $fields->{lc $key}));
+        push @data, [ $key => [ $asset->$key->MemberEmailAddresses ] ];
+    }
+
+    # Display custom fields
+    my $CustomFields = $asset->CustomFields;
+    while (my $cf = $CustomFields->Next()) {
+        next unless !%$fields
+                 || exists $fields->{"cf.{".lc($cf->Name)."}"}
+                 || exists $fields->{"cf-".lc $cf->Name};
+
+        my $vals = $asset->CustomFieldValues($cf->Id());
+        my @out = ();
+        if ( $cf->SingleValue ) {
+            my $v = $vals->Next;
+            push @out, $v->Content if $v;
+        }
+        else {
+            while (my $v = $vals->Next()) {
+                my $content = $v->Content;
+                if ( $v->Content =~ /,/ ) {
+                    $content =~ s/([\\'])/\\$1/g;
+                    push @out, q{'} . $content . q{'};
+                }
+                else {
+                    push @out, $content;
+                }
+            }
+        }
+        push @data, [ ('CF.{' . $cf->Name . '}') => join ',', @out ];
+    }
+
+    my %k = map {@$_} @data;
+    $o = [ map {$_->[0]} @data ];
+    $k = \%k;
+}
+
+#If not new and data was passed to the "content" field
+#Must be a modify asset
+else {
+    my ($get, $set, $key, $val, $n, $s);
+    my $updated;
+    foreach $key (keys %data) {
+        $val = $data{$key};
+        $key = lc $key;
+        $n = 1;
+
+#push @comments, "# Key: $key";
+
+        if (ref $val eq 'ARRAY') {
+            unless ($key =~ /^(?:HeldBy|Contacts)$/i) {
+                $n = 0;
+                $s = "$key may have only one value.";
+                goto SET;
+            }
+        }
+
+        if ($key =~ /^owner$/i) {
+            next if $val eq $asset->Owner->Name;
+            ($n, $s) = $asset->SetOwner($val);
+			($n, $s) = $asset->DeleteRoleMember(
+				'Type' => 'Owner',
+				'User' => $asset->Owner,
+			) if defined $asset->Owner;
+			($n, $s) = $asset->AddRoleMember(
+				'Type' => 'Owner',
+				'User' => $val,
+			);
+        }
+        elsif (exists $simple{$key}) {
+            $key = $simple{$key};
+            $set = "Set$key";
+            my $current = $asset->$key;
+            $current = '' unless defined $current;
+
+            next if ($val eq $current) or ($current =~ /^\d+$/ && $val =~ /^\d+$/ && $val == $current);
+            ($n, $s) = $asset->$set("$val");
+        }
+        elsif (exists $dates{$key}) {
+            $key = $dates{$key};
+
+            # We try to detect whether it should update a field by checking
+            # whether its current value equals the entered value. Since the
+            # LastUpdated field is automatically updated as other columns are
+            # changed, it is not properly skipped. Users cannot update this
+            # field anyway.
+            next if $key eq 'LastUpdated';
+
+            $set = "Set$key";
+
+            my $time = RT::Date->new($session{CurrentUser});
+            $time->Set(Format => 'sql', Value => $asset->$key);
+            next if ($val =~ /^not set$/i || $val eq $time->AsString);
+
+            $time->Set(Format => 'unknown', Value => $val);
+            ($n, $s) = $asset->$set($time->ISO);
+        }
+        elsif (exists $people{$key}) {
+            $key = $people{$key};
+            my ($p, @msgs);
+
+            my %new  = map {$_=>1} @{ vsplit($val) };
+            my $type = $key eq 'Contacts' ? 'Contact' : $key;
+            my %old  = map {$_=>1} $asset->RoleGroup($type)->MemberEmailAddresses();
+			my $group = $asset->RoleGroup( $type );
+			my $principal;
+#			$principal=$asset->CanonicalizePrincipal(Group => $val)
+#				unless $principal=$asset->CanonicalizePrincipal(User => $val);
+#push @comments, "#\n# Group name: ".$group->Label;
+
+            foreach $p (keys %old) {  #Maybe use $asset->HasMember?
+#push @comments, "# Old key item: $p";
+#push @comments, "# New obj: ".Dumper(\%new);
+#push @comments, "# exists: ".exists $new{$p};
+                unless (exists $new{$p}) {
+#					if ($asset->$key->HasMember($p)) {
+						push @comments, "# Removing: $p";
+#TODO: This doens't work... why??
+#SAYS: HeldBy: delete: user@domain.com is not a Held By
+	                    ($s, $n) = $asset->DeleteRoleMember(Type => $type, User => $p);
+    	                push @msgs, [ $s, 'delete: '.$n ];
+#					}
+                }
+            }
+#push @comments, "#\n# Group name: ".$group->Label;
+            foreach $p (keys %new) {
+#push @comments, "# New key: $p";
+#push @comments, "# Current members: ".$group->MemberEmailAddresses();
+#                unless ($asset->$key->HasMember($p)) {
+#					push @comments, "# Adding: $p";
+                    ($s, $n) = $asset->AddRoleMember(Type => $type, User => $p);
+                    push @msgs, [ $s, 'add'.$n ] unless $n =~ m/ is already /;
+#                }
+            }
+
+            $n = 1;
+            if (@msgs = grep {$_->[0] == 0} @msgs) {
+                $n = 0;
+                $s = join "\n", map {"# ".$_->[1]} @msgs;
+                $s =~ s/^# //;
+            }
+        }
+        # Set custom field
+        elsif ($key =~ /^$cf_spec/) {
+            $key = $1 || $2;
+
+            my $cf = RT::CustomField->new( $session{CurrentUser} );
+            $cf->ContextObject( $asset );
+            $cf->LoadByName(
+                Name          => $key,
+                LookupType    => RT::Asset->CustomFieldLookupType,
+                ObjectId      => $asset->Catalog,
+                IncludeGlobal => 1,
+            );
+
+            if (not $cf->id) {
+                $n = 0;
+                $s = "Unknown custom field.";
+            }
+            else {
+                my $vals = $asset->CustomFieldValues($cf->id);
+
+                if ( $asset->CustomFieldValueIsEmpty( Field => $cf, Value => $val ) ) {
+                    while ( my $val = $vals->Next ) {
+                        ($n, $s) = $asset->DeleteCustomFieldValue(
+                            Field => $cf, ValueId => $val->id,
+                        );
+                        $s =~ s/^# // if defined $s;
+                    }
+                }
+                elsif ( $cf->SingleValue ) {
+                    ($n, $s) = $asset->AddCustomFieldValue(
+                         Field => $cf, Value => $val );
+                    $s =~ s/^# // if defined $s;
+                }
+                else {
+                    my @new = @{vsplit($val, 1)};
+
+                    my %new;
+                    $new{$_}++ for @new;
+
+                    while (my $v = $vals->Next()) {
+                        my $c = $v->Content;
+                        if ( $new{$c} ) {
+                            $new{$c}--;
+                        }
+                        else {
+                            $asset->DeleteCustomFieldValue( Field => $cf, ValueId => $v->id );
+                        }
+                    }
+                    for ( @new ) {
+                        while ( $new{$_} && $new{$_}-- ) {
+                            next if $asset->CustomFieldValueIsEmpty(
+                                Field => $cf,
+                                Value => $_,
+                            );
+                            ($n, $s) = $asset->AddCustomFieldValue(
+                                Field => $cf, Value => $_ );
+                            $s =~ s/^# // if defined $s;
+                        }
+                    }
+                }
+            }
+		}
+
+        elsif ($key ne 'id') {
+            $n = 0;
+            $s = "Unknown field.";
+        }
+
+    SET:
+        if ($n == 0) {
+            $e = 1;
+            push @comments, "# $key: $s";
+            unless (@$o) {
+                my %o = keys %$changes;
+                delete @o{"id", @fields};
+                @$o = ("id", @fields, keys %o);
+                $k = $changes;
+            }
+        }
+        else {
+            $updated ||= 1;
+        }
+    }
+
+    push(@comments, "# Asset $id updated.") if $updated;
+}
+
+DONE:
+$c ||= join("\n", @comments) if @comments;
+return [ $c, $o, $k, $e ];
+</%INIT>
